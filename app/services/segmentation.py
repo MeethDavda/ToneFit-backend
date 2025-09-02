@@ -10,7 +10,8 @@ import colorsys
 
 # --- Hard dependency: rembg (+ onnxruntime or onnxruntime-silicon) ---
 try:
-    from rembg import remove as rembg_remove
+    from rembg import remove as rembg_remove, new_session
+    SESSION = new_session("u2netp") 
 except Exception as e:
     raise ImportError(
         "rembg is required for background removal.\n"
@@ -24,20 +25,26 @@ except Exception as e:
 Mask = np.ndarray                  # uint8 [H,W], values {0,255}
 BBox = Tuple[int, int, int, int]   # (x1, y1, x2, y2)
 
+def _resize_max_side(img, max_side=1024):
+    h, w = img.shape[:2]
+    side = max(h, w)
+    if side <= max_side: return img
+    scale = max_side / side
+    return cv2.resize(img, (int(w*scale), int(h*scale)), interpolation=cv2.INTER_AREA)
 
 def remove_background(bgr: np.ndarray, alpha_threshold: int = 8) -> Mask:
-    """
-    Run rembg and return a binary mask (255=foreground/person).
-    alpha_threshold>0 helps remove faint halos.
-    """
     if bgr is None or bgr.size == 0:
         raise ValueError("remove_background: empty image")
 
-    ok, buf = cv2.imencode(".png", bgr)
+    # ↓↓↓ shrink BEFORE rembg to cut memory/CPU
+    bgr_small = _resize_max_side(bgr, max_side=1024)
+
+    ok, buf = cv2.imencode(".png", bgr_small)
     if not ok:
         raise ValueError("PNG encode failed for rembg input.")
 
-    cutout_png = rembg_remove(buf.tobytes())  # RGBA bytes
+    # reuse the same session (don’t reload the model per request!)
+    cutout_png = rembg_remove(buf.tobytes(), session=SESSION)
     rgba = _decode_rgba(cutout_png)
     if rgba is None or rgba.shape[2] < 4:
         raise RuntimeError("rembg did not return an RGBA image.")
